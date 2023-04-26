@@ -1,6 +1,31 @@
 import NextAuth from "next-auth";
 import SpotifyProvider from "next-auth/providers/spotify"
-import { LOGIN_URL } from "../../../lib/spotify";
+import spotifyApi, { LOGIN_URL } from "../../../lib/spotify";
+
+async function refreshAccessToken(token){
+    try{
+
+        spotifyApi.setAccessToken(token.accessToken);
+        spotifyApi.setRefreshToken(token.refreshToken);
+
+        const {body: refreshedToken} = await spotifyApi.refreshAccessToken();
+
+        return {
+            ...token,
+            accessToken: refreshedToken.access_token,
+            accessTokenExpires: Date.now + refreshToken.expires_in * 1000, // = 1 hora como 3600 dado pelo spotify api
+            refreshToken: refreshedToken.refresh_token ?? token.refreshToken, //apenas substitui se o novo refreshed token cair pelo antigo
+        };
+
+    } catch(error) {
+        console.log(error);
+
+        return{
+            ...token,
+            error:"RefreshAccessTokenError",
+        }
+    }
+}
 
 export default NextAuth({
     providers: [
@@ -10,4 +35,40 @@ export default NextAuth({
             authorization: LOGIN_URL
         }),
     ],
+    secret: process.env.JWT_SECRET,
+    pages: {
+        signIn: '/login'
+    },
+    callbacks: {
+        async jwt({token, account, user}){
+
+            //primeiro login
+            if(account && user){
+                return {
+                    ...token,
+                    accessToken: account.access_token,
+                    refreshToken: account.refresh_token,
+                    username: account.providerAccountId,
+                    accessTokenExpires: account.expires_at * 1000, 
+                };
+            }
+            // se o token não expirou então retornar ele
+            if(Date.now() < token.accessTokenExpires){
+                console.log("EXISTING TOKEN IS VALID");
+                return token;
+            }
+
+            // access token expirou, então ele precisa ser atualizado...
+            console.log("ACCESS TOKEN HAS EXPIRED, REFRESHING...");
+            return await refreshAccessToken(token);
+        },
+
+        async session({session,token}){
+            session.user.accessToken = token.accessToken;
+            session.user.refreshToken = token.refreshToken;
+            session.user.username = token.username;
+
+            return session;
+        }
+    }
 })
